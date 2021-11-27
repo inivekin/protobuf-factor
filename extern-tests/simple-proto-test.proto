@@ -1,0 +1,21 @@
+syntax = "proto3";
+
+// simple test enum
+enum testEnum_ {
+    zero = 0;
+    O_1_NE = 1; // comments
+    tw_2_o = 2;
+    ThRe_3_E = 3;
+    four_4 = 4;
+}
+
+/* simple test message */
+message test_Message {
+    int32 signed_int = 1;
+    repeated uint64 unsigned_bigboy = 2;
+    oneof choices{
+        /* oneof test */ testEnum_ primary = 3;
+        string secondary = 4;
+    }; // pointless semicolon
+}
+
