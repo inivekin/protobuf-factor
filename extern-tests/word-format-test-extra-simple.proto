@@ -1,0 +1,21 @@
+syntax = "proto3";
+
+message oneword {
+    uint32 value = 1;
+    enum enumtest {
+        one = 0;
+        two = 1;
+    }
+    enumtest enumval = 2;
+}
+
+enum otherenum {
+    three = 0;
+    four = 1;
+}
+
+message twoword {
+    uint32 value = 300;
+    uint32 other = 2;
+}
+

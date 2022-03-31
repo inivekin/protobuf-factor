@@ -1,0 +1,19 @@
+syntax = "proto3";
+
+message oneword {
+    uint32 value = 1;
+    string second = 2;
+}
+
+message twoword {
+    uint32 value = 300;
+}
+
+// message stringmsg {
+    // string value = 2;
+// }
+
+message threeword {
+    twoword value = 1000;
+}
+

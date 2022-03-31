@@ -2,15 +2,22 @@ USING: arrays kernel math math.parser peg peg.ebnf multiline sequences sets stri
 ! FIXME(kevinc) peg USE is only for ignore keyword because emptyStatements keep bringing them into the output?
 IN: protobuf.tokenize
 
+! to create a runtime tuple:
+! [ "test1" "protobuf.tokenize" create-word tuple { "a" "x" "y" } define-tuple-class ] with-compilation-unit 
+
+! for when a value is not given 
+! (can't just use f because that would be ambiguous with a set boolean f)
+SINGLETON: +unset+
+
 TUPLE: protobuf syntax def ;
 
-TUPLE: message name fields ;
+TUPLE: message ;
 TUPLE: enum name map ;
 TUPLE: oneof name fields ;
 
 TUPLE: identifier child? parents name ;
 
-TUPLE: field repeated? type name value ;
+TUPLE: field repeated? type name tag ;
 
 ERROR: unsupported-proto-version ;
 
@@ -20,6 +27,87 @@ ERROR: unsupported-proto-version ;
 ! FIXME(kevinc) can use the ebnf And rule to not need this
 : prefix-initial-char ( vec -- str )
     dup pop append ;
+
+: create-message-word ( str -- word superclass ) 
+    "protobuf.tokenize" create-word message ;
+
+SINGLETON: +int32+
+SINGLETON: +int64+
+SINGLETON: +uint32+
+SINGLETON: +uint64+
+SINGLETON: +sint32+
+SINGLETON: +sint64+
+SINGLETON: +bool+
+SINGLETON: +enum+
+SINGLETON: +fixed64+
+SINGLETON: +sfixed64+
+SINGLETON: +double+
+SINGLETON: +string+
+SINGLETON: +bytes+
+SINGLETON: +embedded-messages+
+SINGLETON: +packed-repeated-fields+
+SINGLETON: +fixed32+
+SINGLETON: +sfixed32+
+SINGLETON: +float+
+
+TUPLE: message-field { tag read-only } { type read-only } { value initial: +unset+ } ;
+
+: message-type>class ( str -- obj )
+    {
+        { [ dup "uint32" = ] [ drop +uint32+ ] }
+        { [ dup "string" = ] [ drop +string+ ] }
+        { [ dup identifier? ] [ ] } ! TODO not sure how to handle this, need to scan the name as a token? maybe get references afterwards?
+        [ drop "unhandled message type" throw ]
+    } cond ;
+        ! submessage: { [ indentifier? ] [ ] } 
+
+:: field>slot-spec ( field -- slot-spec )
+    field name>>
+    field tag>>
+    message-field
+    field tag>>
+    field type>> message-type>class
+    +unset+ 
+    message-field boa
+    f
+    slot-spec boa ;
+    
+:: enum>slot-spec ( enum -- slot-spec )
+    enum name>>
+    0
+    assoc
+    enum map>> >biassoc
+    t
+    slot-spec boa ;
+
+: create-message-field-slots ( vec -- seq<slot-spec> )
+    [
+        {
+            { [ dup field? ] [ field>slot-spec ] }
+            { [ dup enum? ] [ enum>slot-spec ] } 
+            [ "unimplemented object type cannot be integrated into a message obj" throw ]
+        } cond
+    ] map ;
+
+! not sure how this is going to work...
+: parent-identifiers-to-message ( name fields -- )
+    [ dup type>> identifier? [ parent<< ] [ 2drop ] if ] with each ;
+
+: prepare-message-fields ( vec -- vec )
+    [ ignore = ] reject ;
+
+: message-class-and-accessor-instantiation ( word fields seq<slot-spec> -- )
+    [ define-tuple-class ] [ nip define-accessors ] 3bi ;
+
+: message-class-specification ( name fields -- word fields seq<slot-spec> )
+    [ create-message-word ] [ prepare-message-fields create-message-field-slots ] bi* ;
+
+! for each field in the vector, create a slot in a message with the requisite name
+: (message) ( name fields -- )
+    [ message-class-specification  message-class-and-accessor-instantiation ] with-compilation-unit ;
+
+: order-by-tag ( fields -- fields* )
+    [ [ tag>> ] [ name>> ] [ type>> message-type>class ] tri 2array 2array ] map >hashtable ;
 
 EBNF: tokenize [=[
 
@@ -104,23 +192,25 @@ enumBody = meta~ "{"~ meta~ ( option | enumField | emptyStatement~ )* meta~ "}"~
 enumField = meta~ ident meta~ "="~ meta~ ( "-" )? meta~ intLit ( meta~ "["~ meta~ enumValueOption ( meta~ ","~  meta~ enumValueOption )* meta~ "]"~ )? meta~ ";"~ => [[ first3 swap [ neg ] when [ >string ] [ ] bi* 2array ]]
 enumValueOption = meta~ optionName meta~ "="~ meta~ constant
 
-message = meta~ "message"~ meta~ ident meta~ messageBody => [[ first2 [ >string ] [ [ ignore = ] reject ] bi* message boa ]]
+message = meta~ "message"~ meta~ ident meta~ messageBody => [[ first2 [ >string ] dip [ (message) ] [ order-by-tag 2array ] 2bi ]]
 messageBody = meta~ "{"~ meta~ ( field | enum | message | option | oneof | mapField | reserved | emptyStatement )* meta~ "}"~
 
 service = meta~ "service" meta~ serviceName meta~ "{" (meta~ ( option | rpc | emptyStatement ))* meta~ "}"
 rpc = meta~ "rpc" meta~ rpcName meta~ "(" meta~ ( "stream" )? meta~ messageType meta~ ")" meta~ "returns" meta~ "(" meta~ ( "stream" )? meta~ messageType meta~ ")" (meta~ ( meta~ "{"~ (meta~ (option | emptyStatement ))* meta~ "}"~ ) | meta~ ";"~)
 
-topLevelDef = ( message | enum | service )
-proto = meta~ syntax (meta~ ( import | package | option | topLevelDef | emptyStatement ))* => [[ unclip-slice swap first protobuf boa ]]
+topLevelDef = ( message | enum | service ) 
+proto = meta~ syntax (meta~ ( import | package | option | topLevelDef | emptyStatement ))* => [[ unclip-slice swap first protobuf boa [ >hashtable ] change-def ]]
 
 rule = proto
 ]=]
 
-! FIXME(kevin) official protobuf descriptor: decimalLit = [1-9] ( decimalDigit )*
-! this does not allow for an enum value of 0, does google not actually use these defs?
-
-! FIXME(kevinc) protobuf entry for fieldNumber is also invalid EBNF
-
-! FIXME(kevinc) fieldNumber had asemicolon and was always followed by another semicolon in othe things like oneofs...
+! changes I had to make to googles ebnf description that might have unintended effects
+! NOTE(kevin) official protobuf descriptor: decimalLit = [1-9] ( decimalDigit )*
+! this does not allow for an enum value of 0 which enums can't be made without, does google not use these defs?
+! NOTE(kevinc) protobuf entry for fieldNumber is also invalid EBNF
+! NOTE(kevinc) fieldNumber had asemicolon and was always followed by another semicolon in othe things like oneofs...
 
 ! charValue = hexEscape | octEscape | charEscape | /[^\0\n\\]/
+! changed
+! field = meta~ ( "repeated" )? meta~ type meta~ ident meta~ "="~ meta~ fieldNumber meta~ ( "[" fieldOptions "]" )? meta~ ";"~ => [[ [ first >boolean ] [ rest first3 ] bi field boa ]]
+! message = meta~ "message"~ meta~ ident meta~ messageBody => [[ first2 [ >string ] [ [ ignore = ] reject ] bi* message boa ]]
